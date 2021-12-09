@@ -9,6 +9,9 @@
 #    exit $?
 #fi
 
+# Arguments:
+# 1. xcp bootstrap directory, eg for PNC: ria+file:///cbica/projects/RBC/production/PNC/xcp/output_ria#~data
+
 DATALAD_VERSION=$(datalad --version)
 
 if [ $? -gt 0 ]; then
@@ -19,11 +22,27 @@ fi
 
 echo USING DATALAD VERSION ${DATALAD_VERSION}
 
+##  XCP input
+# XCPINPUT=$1
+XCPINPUT=/cbica/projects/RBC/production/PNC/xcp/
+if [[ -z ${XCPINPUT} ]]
+then
+    echo "Required argument is an identifier of the XCP output zips"
+    # exit 1
+fi
+
+if [[ ! -d "${XCPINPUT}/output_ria/alias/data" ]]
+then
+    echo "There must be alias in the output ria store that points to the"
+    echo "XCP output dataset"
+    # exit 1
+fi
+
+
 set -e -u
-
-
+# set +e
 ## Set up the directory that will contain the necessary directories
-PROJECTROOT=${PWD}/xcp
+PROJECTROOT=${PWD}/xcp_derivatives
 if [[ -d ${PROJECTROOT} ]]
 then
     echo ${PROJECTROOT} already exists
@@ -35,27 +54,6 @@ then
     echo Unable to write to ${PROJECTROOT}\'s parent. Change permissions and retry
     # exit 1
 fi
-
-
-##  fmriprep input
-#FMRIPREPINPUT=~/testing/hrc_exemplars/fmriprep/merge_ds
-FMRIPREPINPUT=$1
-if [[ -z ${FMRIPREPINPUT} ]]
-then
-    echo "Required argument is an identifier of the BIDS source"
-    # exit 1
-fi
-
-# Is it a directory on the filesystem?
-BIDS_INPUT_METHOD=clone
-if [[ -d "${FMRIPREPINPUT}" ]]
-then
-    # Check if it's datalad
-    BIDS_DATALAD_ID=$(datalad -f '{infos[dataset][id]}' wtf -S \
-                      dataset -d ${FMRIPREPINPUT} 2> /dev/null || true)
-    [ "${BIDS_DATALAD_ID}" = 'N/A' ] && BIDS_INPUT_METHOD=copy
-fi
-
 
 ## Start making things
 mkdir -p ${PROJECTROOT}
@@ -79,19 +77,10 @@ datalad create-sibling-ria -s output "${output_store}"
 pushremote=$(git remote get-url --push output)
 datalad create-sibling-ria -s input --storage-sibling off "${input_store}"
 
-# register the input dataset
-if [[ "${BIDS_INPUT_METHOD}" == "clone" ]]
-then
-    echo "Cloning input dataset into analysis dataset"
-    datalad clone -d . ${FMRIPREPINPUT} inputs/data
-    # amend the previous commit with a nicer commit message
-    git commit --amend -m 'Register input data dataset as a subdataset'
-else
-    echo "WARNING: copying input data into repository"
-    mkdir -p inputs/data
-    cp -r ${FMRIPREPINPUT}/* inputs/data
-    datalad save -r -m "added input data"
-fi
+echo "Cloning input dataset into analysis dataset"
+datalad clone -d . ria+file://${XCPINPUT}/output_ria#~data inputs/data
+git commit --amend -m 'Register preprocessed dataset as a subdataset'
+
 
 SUBJECTS=$(find inputs/data -name '*.zip' | cut -d '/' -f 3 | cut -d '_' -f 1 | sort | uniq)
 if [ -z "${SUBJECTS}" ]
@@ -100,44 +89,15 @@ then
     # exit 1
 fi
 
-cd ${PROJECTROOT}
-
-# Clone the containers dataset. If specified on the command, use that path
-
-#MUST BE AS NOT RBC USER
-# build the container in /cbica/projects/RBC/dropbox
-# singularity build xcp-abcd-0.0.1.sif docker://pennlinc/xcp_abcd:0.0.4
-
-#AS RBC
-# then copy to /cbica/projects/RBC/xcp-abcd-container
-# datalad create -D "xcp-abcd container".
-
-# do that actual copy
-#datalad containers-add --url ~/dropbox/xcp-abcd-0.0.4.sif xcp-abcd-0-0-4 --update
-
-#can delete
-#rm /cbica/projects/RBC/dropbox/xcp-abcd-0.0.4.sif
-
-CONTAINERDS=~/xcp-abcd-0-0-4-container
-if [[ ! -z "${CONTAINERDS}" ]]; then
-    datalad clone ${CONTAINERDS} pennlinc-containers
-else
-    echo "No containers dataset specified, attempting to clone from pmacs"
-    datalad clone \
-        ria+ssh://sciget.pmacs.upenn.edu:/project/bbl_projects/containers#~pennlinc-containers \
-        pennlinc-containers
-fi
-
 cd ${PROJECTROOT}/analysis
-datalad install -d . --source ${PROJECTROOT}/pennlinc-containers
-
+mkdir outputs
 ## the actual compute job specification
 cat > code/participant_job.sh << "EOT"
 #!/bin/bash
 #$ -S /bin/bash
-#$ -l h_vmem=32G
-#$ -l s_vmem=32G
-#$ -l tmpfree=100G
+#$ -l h_vmem=8G
+#$ -l s_vmem=8G
+#$ -l tmpfree=50G
 # Set up the correct conda environment
 source ${CONDA_PREFIX}/bin/activate base
 echo I\'m in $PWD using `which python`
@@ -151,9 +111,9 @@ pushgitremote="$2"
 subid="$3"
 
 # change into the cluster-assigned temp directory. Not done by default in SGE
-cd ${CBICA_TMPDIR}
+# cd ${CBICA_TMPDIR}
 # OR Run it on a shared network drive
-# cd /cbica/comp_space/$(basename $HOME)
+cd /cbica/comp_space/$(basename $HOME)
 
 # Used for the branch names and the temp dir
 BRANCH="job-${JOB_ID}-${subid}"
@@ -168,7 +128,7 @@ datalad clone "${dssource}" ds
 
 # all following actions are performed in the context of the superdataset
 cd ds
-
+mkdir outputs
 # in order to avoid accumulation temporary git-annex availability information
 # and to avoid a syncronization bottleneck by having to consolidate the
 # git-annex branch across jobs, we will only push the main tracking branch
@@ -192,15 +152,15 @@ git checkout -b "${BRANCH}"
 # ------------------------------------------------------------------------------
 # Do the run!
 
-datalad get -r pennlinc-containers
+datalad get -n inputs/data
 
 datalad run \
-    -i code/xcp_zip.sh \
-    -i inputs/data/${subid}*fmriprep*.zip \
+    -i code/unpack.sh \
+    -i inputs/data/${subid}*xcp*.zip \
     --explicit \
-    -o ${subid}_xcp-0-0-4.zip \
-    -m "xcp-abcd-run ${subid}" \
-    "bash ./code/xcp_zip.sh ${subid}"
+    -o outputs \
+    -m "unpack ${subid}" \
+    "bash ./code/unpack.sh ${subid}"
 
 # file content first -- does not need a lock, no interaction with Git
 datalad push --to output-storage
@@ -212,42 +172,34 @@ git annex dead here
 echo TMPDIR TO DELETE
 echo ${BRANCH}
 
-datalad uninstall -r --nocheck --if-dirty ignore inputs/data
 datalad drop -r . --nocheck
+datalad uninstall -r inputs/data
 git annex dead here
 cd ../..
 rm -rf $BRANCH
 
 echo SUCCESS
 # job handler should clean up workspace
+
 EOT
 
 chmod +x code/participant_job.sh
 
 
-cat > code/xcp_zip.sh << "EOT"
+cat > code/unpack.sh << "EOT"
 #!/bin/bash
 set -e -u -x
 
 subid="$1"
 wd=${PWD}
 
-cd inputs/data
-7z x ${subid}_fmriprep-20.2.3.zip
+7z x inputs/data/${subid}_xcp-0-0-4.zip
+mv xcp_abcd/** outputs/
 cd $wd
 
-mkdir -p ${PWD}/.git/tmp/wdir
-singularity run --cleanenv -B ${PWD} pennlinc-containers/.datalad/environments/xcp-abcd-0-0-4/image inputs/data/fmriprep xcp participant \
---despike --lower-bpf 0.01 --upper-bpf 0.08 --participant_label $subid -p 36P -f 10 -w ${PWD}/.git/tmp/wkdir
-singularity run --cleanenv -B ${PWD} pennlinc-containers/.datalad/environments/xcp-abcd-0-0-4/image inputs/data/fmriprep xcp participant \
---despike --lower-bpf 0.01 --upper-bpf 0.08 --participant_label $subid -p 36P -f 10 -w ${PWD}/.git/tmp/wkdir --cifti
-cd xcp
-7z a ../${subid}_xcp-0-0-4.zip xcp_abcd
-rm -rf prep .git/tmp/wkdir
 EOT
 
-chmod +x code/xcp_zip.sh
-cp ${FREESURFER_HOME}/license.txt code/license.txt
+chmod +x code/unpack.sh
 
 mkdir logs
 echo .SGE_datalad_lock >> .gitignore
@@ -278,7 +230,7 @@ dssource="${input_store}#$(datalad -f '{infos[dataset][id]}' wtf -S dataset)"
 pushgitremote=$(git remote get-url --push output)
 eo_args="-e ${PWD}/logs -o ${PWD}/logs"
 for subject in ${SUBJECTS}; do
-  echo "qsub -cwd ${env_flags} -N xcp${subject} ${eo_args} \
+  echo "qsub -cwd ${env_flags} -N unpack${subject} ${eo_args} \
   ${PWD}/code/participant_job.sh \
   ${dssource} ${pushgitremote} ${subject} " >> code/qsub_calls.sh
 done
@@ -291,10 +243,7 @@ datalad save -m "SGE submission setup" code/ .gitignore
 # cleanup - we have generated the job definitions, we do not need to keep a
 # massive input dataset around. Having it around wastes resources and makes many
 # git operations needlessly slow
-if [ "${BIDS_INPUT_METHOD}" = "clone" ]
-then
-    datalad uninstall -r --nocheck inputs/data
-fi
+datalad uninstall -r --nocheck inputs/data
 
 
 # make sure the fully configured output dataset is available from the designated
@@ -314,7 +263,3 @@ echo SUCCESS
 
 #run last sge call to test
 #$(tail -n 1 code/qsub_calls.sh)
-
-
-# bash bootstrap-xcp.sh 'ria+file:///cbica/projects/RBC/production/CCNP/fmriprep/output_ria#~data'
-# bash bootstrap-xcp.sh 'ria+file:///cbica/projects/RBC/production/PNC/fmriprep/output_ria#~data'

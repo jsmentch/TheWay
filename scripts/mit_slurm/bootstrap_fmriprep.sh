@@ -102,7 +102,7 @@ fi
 
 CONTAINERDS=///repronim/containers
 datalad install -d . --source ${CONTAINERDS}
-datalad get containers/images/bids/bids-fmriprep--20.2.3.sing
+datalad get containers/images/bids/bids-fmriprep--20.2.6.sing
 
 ## the actual compute job specification
 cat > code/participant_job.sh << "EOT"
@@ -160,11 +160,11 @@ datalad run \
     -i code/fmriprep_zip.sh \
     -i inputs/data/${subid} \
     -i inputs/data/*json \
-    -i containers/images/bids/bids-fmriprep--20.2.3.sing
+    -i containers/images/bids/bids-fmriprep--20.2.6.sing
     --explicit \
-    -o ${subid}_fmriprep-20.2.3.zip \
-    -o ${subid}_freesurfer-20.2.3.zip \
-    -m "fmriprep:20.2.3 ${subid}" \
+    -o ${subid}_fmriprep-20.2.6.zip \
+    -o ${subid}_freesurfer-20.2.6.zip \
+    -m "fmriprep:20.2.6 ${subid}" \
     "bash ./code/fmriprep_zip.sh ${subid}"
 # file content first -- does not need a lock, no interaction with Git
 datalad push --to output-storage
@@ -189,7 +189,7 @@ set -e -u -x
 subid="$1"
 mkdir -p ${PWD}/.git/tmp/wdir
 singularity run --cleanenv -B ${PWD} \
-    containers/images/bids/bids-fmriprep--20.2.3.sing
+    containers/images/bids/bids-fmriprep--20.2.6.sing
     inputs/data \
     prep \
     participant \
@@ -204,8 +204,8 @@ singularity run --cleanenv -B ${PWD} \
     --force-bbr \
     --cifti-output 91k -v -v
 cd prep
-7z a ../${subid}_fmriprep-20.2.3.zip fmriprep
-7z a ../${subid}_freesurfer-20.2.3.zip freesurfer
+7z a ../${subid}_fmriprep-20.2.6.zip fmriprep
+7z a ../${subid}_freesurfer-20.2.6.zip freesurfer
 rm -rf prep .git/tmp/wkdir
 EOT
 

@@ -93,7 +93,8 @@ datalad clone -d . ${BIDSINPUT} inputs/data
 # amend the previous commit with a nicer commit message
 git commit --amend -m 'Register input data dataset as a subdataset'
 
-SUBJECTS=$(find inputs/data -type d -name 'sub-*' | cut -d '/' -f 3 )
+#SUBJECTS=$(find inputs/data -type d -name 'sub-*' | cut -d '/' -f 3 )
+SUBJECTS=$(find inputs/data -type d -name 'sub-*' | cut -d '/' -f 3 | head -n 3)
 if [ -z "${SUBJECTS}" ]
 then
     echo "No subjects found in input data"
@@ -151,7 +152,7 @@ git checkout -b "${BRANCH}"
 # outputs. The recorded calls will have specific paths that will enable
 # recomputation outside the scope of the original setup
 datalad get -n "inputs/data/${subid}"
-# Reomve all subjects we're not working on
+# Remove all subjects we're not working on
 (cd inputs/data && rm -rf `find . -type d -name 'sub*' | grep -v $subid`)
 # ------------------------------------------------------------------------------
 # Do the run!
